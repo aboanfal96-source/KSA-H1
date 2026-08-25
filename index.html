@@ -5244,18 +5244,26 @@ function buildUpcomingTimeWindows(cs,pivot,dc){
 function buildExecutionPlan(price,pivot,tat,ind,dirUp){
   const atr=ind?.atr||price*0.015;
   const entry=price;
-  /* وقف الخسارة: كسر واضح لنقطة الارتكاز + هامش ATR (وليس رقماً عشوائياً) */
+  /* 🛠️ إصلاح: الوقف يُبنى من سعر الدخول الحالي (entry) بهامش ATR طبيعي —
+     وليس من نقطة الارتكاز (pivot.p) مباشرة. نقطة الارتكاز قد تكون بعيدة
+     جداً عن السعر الحالي زمنياً وسعرياً (مثال: ارتكاز عند 12.73 بينما
+     السعر الحالي 17.8 بعد صعود قوي)، فاستخدامها كمصدر للمسافة كان يولّد
+     وقفاً/أهدافاً بعيدة وغير واقعية بالكامل. الوقف الآن دائماً بجوار
+     سعر الدخول الفعلي، بمسافة = نصف ATR (أو 0.5% كحد أدنى). */
   const stopBuffer=Math.max(atr*0.5,price*0.005);
-  const stop=dirUp?+(pivot.p-stopBuffer).toFixed(2):+(pivot.p+stopBuffer).toFixed(2);
+  const stop=dirUp?+(entry-stopBuffer).toFixed(2):+(entry+stopBuffer).toFixed(2);
   const riskPerShare=Math.abs(entry-stop);
   if(riskPerShare<=0)return null;
   const target1=dirUp?+(entry+riskPerShare*2).toFixed(2):+(entry-riskPerShare*2).toFixed(2);
   const target2=dirUp?+(entry+riskPerShare*3.2).toFixed(2):+(entry-riskPerShare*3.2).toFixed(2);
   const rr1=2.0,rr2=+((Math.abs(target2-entry))/riskPerShare).toFixed(1);
+  /* نقطة الارتكاز تُستخدم الآن فقط كملاحظة سياقية — هل الوقف الجديد
+     يقع خلف الارتكاز (تأكيد إضافي) أم لا (تحذير أن الارتكاز أبعد) */
+  const pivotBeyondStop=dirUp?(pivot.p<stop):(pivot.p>stop);
   const confirmCondition=dirUp
     ?`إغلاق شمعة فوق ${(+(pivot.p*1.005).toFixed(2))} بحجم تداول أعلى من المتوسط 20 يوم، أو كسر أعلى قمة فرعية خلال آخر 5 جلسات`
     :`إغلاق شمعة تحت ${(+(pivot.p*0.995).toFixed(2))} بحجم تداول أعلى من المتوسط 20 يوم، أو كسر أدنى قاع فرعي خلال آخر 5 جلسات`;
-  return{entry:+entry.toFixed(2),stop,riskPerShare:+riskPerShare.toFixed(2),target1,target2,rr1,rr2,confirmCondition,dirUp};
+  return{entry:+entry.toFixed(2),stop,riskPerShare:+riskPerShare.toFixed(2),target1,target2,rr1,rr2,confirmCondition,dirUp,pivotBeyondStop,pivotPrice:pivot.p};
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -5689,9 +5697,14 @@ async function smartTimingAnalysis() {
           ✅ يتوافق مع أداة "التنبؤ الكسوري المتقدم" (فراكتالات + ARIMA) — نفس الإشارة (${predictionCompare.dir}) من منهجية مستقلة تماماً.
         </div>`) : ''}
         <div style="${rowStyle}">✅ <b>شرط التأكيد قبل الدخول:</b> ${plan.confirmCondition}</div>
+        ${!plan.pivotBeyondStop ? `
+        <div style="margin:8px 0;padding:10px 12px;background:rgba(255,180,0,.1);border:1px solid rgba(255,180,0,.3);border-radius:8px;">
+          <div style="font-weight:800;color:#ffb400;margin-bottom:4px;">⚠️ ملاحظة مهمة للمضارب</div>
+          <div>نقطة الارتكاز التاريخية (${plan.pivotPrice} ر.س) بعيدة عن سعر الدخول الحالي (${plan.entry} ر.س) — السهم تحرّك كثيراً منذ تلك النقطة. الوقف والأهداف أدناه محسوبة من السعر الحالي مباشرة (وليس من نقطة الارتكاز القديمة)، وهذا هو الصحيح للتداول العملي — فقط اعلم أن "نقطة الارتكاز" هنا مرجع تاريخي للسياق، لا مصدر لحساب المخاطرة.</div>
+        </div>` : ''}
         <div style="margin-top:10px;padding:10px 12px;background:rgba(255,215,0,.06);border:1px solid rgba(255,215,0,.2);border-radius:8px;">
           <div style="${rowStyle}">🎯 نقطة الدخول المرجعية: <b style="color:#FFD700">${plan.entry} ر.س</b></div>
-          <div style="${rowStyle}">🛑 وقف الخسارة الصارم: <b style="color:#f04458">${plan.stop} ر.س</b> (المخاطرة/سهم: ${plan.riskPerShare} ر.س)</div>
+          <div style="${rowStyle}">🛑 وقف الخسارة الصارم: <b style="color:#f04458">${plan.stop} ر.س</b> (المخاطرة/سهم: ${plan.riskPerShare} ر.س — ${((plan.riskPerShare/plan.entry)*100).toFixed(1)}% من سعر الدخول)</div>
           <div style="${rowStyle}">🥇 الهدف الأول: <b style="color:#0ecf7e">${plan.target1} ر.س</b> (R:R = 1:${plan.rr1})</div>
           <div>🥈 الهدف الثاني: <b style="color:#0ecf7e">${plan.target2} ر.س</b> (R:R = 1:${plan.rr2})</div>
         </div>` : `<div style="color:#9aa4b8">تعذّر بناء خطة تنفيذية موثوقة (مخاطرة/سهم غير منطقية) — يُنصح بالانتظار لنقطة ارتكاز أوضح.</div>`}
