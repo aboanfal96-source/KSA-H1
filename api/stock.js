@@ -1,25 +1,67 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   /api/stock — وسيط بيانات السوق
+   ──────────────────────────────────────────────────────────────────────────
+   يعمل من جهة الخادم فلا يخضع لقيد CORS، ولهذا حُذف الاعتماد على وسطاء
+   CORS العامّين من الواجهة: أطراف ثالثة غير موثوقة كانت تتوسّط كل طلبات
+   السوق، بلا ضمان توفّر ولا اتفاقية خدمة، فإذا سقطت بقيت المنصة على بيانات
+   عشوائية بلا أن يدري المستخدم.
+
+   🛠️ إصلاح أمني: النسخة السابقة كانت تحقن `symbol` في مسار الرابط مباشرة
+   بلا أي تحقّق:
+       `${host}/v8/finance/chart/${sym}?range=${range}&interval=${interval}`
+   رمز مثل `../../v1/test/getcrumb` أو `2222.SR?x=y#` يغيّر المسار المطلوب
+   ويحوّل هذه الدالة إلى وسيط طلبات عامّ نحو نطاق Yahoo — وهو ما تمنعه
+   قائمة السماح أدناه. والرموز والنطاقات تُقارَن الآن بقوائم مغلقة، لا
+   تُهرَّب فقط.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* رمز تداول سعودي: أربعة أو خمسة أرقام، مع لاحقة .SR اختيارية */
+const SYMBOL_RE = /^\d{4,5}(\.SR)?$/i;
+
+/* قيم Yahoo المسموحة فقط — لا تُمرَّر سلسلة من المستخدم إلى الرابط */
+const RANGES = new Set(['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']);
+const INTERVALS = new Set(['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo']);
+
+const HOSTS = ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com'];
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
-  const { symbol = '2222', range = '3mo', interval = '1d' } = req.query;
-  const sym = symbol.endsWith('.SR') ? symbol : symbol + '.SR';
-  const h = {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'method_not_allowed', message: 'الطريقة غير مدعومة' });
+
+  const { symbol = '2222', range = '3mo', interval = '1d' } = req.query || {};
+
+  if (typeof symbol !== 'string' || !SYMBOL_RE.test(symbol))
+    return res.status(400).json({ error: 'bad_symbol', message: 'رمز غير صالح — يُقبل رقم تداول من 4 أو 5 خانات فقط' });
+  if (!RANGES.has(String(range)))
+    return res.status(400).json({ error: 'bad_range', message: 'نطاق زمني غير مدعوم' });
+  if (!INTERVALS.has(String(interval)))
+    return res.status(400).json({ error: 'bad_interval', message: 'فاصل زمني غير مدعوم' });
+
+  const sym = symbol.toUpperCase().endsWith('.SR') ? symbol.toUpperCase() : symbol + '.SR';
+
+  const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Accept': 'application/json',
     'Referer': 'https://finance.yahoo.com/',
   };
-  for (const host of ['https://query1.finance.yahoo.com','https://query2.finance.yahoo.com']) {
+
+  let lastStatus = 0;
+  for (const host of HOSTS) {
     try {
-      const r = await fetch(
-        `${host}/v8/finance/chart/${sym}?range=${range}&interval=${interval}&includePrePost=false`,
-        { headers: h }
-      );
+      /* مهلة صريحة: بلا مهلة يبقى الطلب معلّقاً حتى تنتهي مهلة الدالة
+         نفسها، فيدفع المستخدم انتظاراً كاملاً مقابل مصدر ساقط. */
+      const url = `${host}/v8/finance/chart/${encodeURIComponent(sym)}`
+        + `?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(interval)}&includePrePost=false`;
+      const r = await fetch(url, { headers, signal: AbortSignal.timeout(9000) });
+      lastStatus = r.status;
       if (!r.ok) continue;
       const d = await r.json();
       if (!d?.chart?.result?.[0]) continue;
       res.setHeader('Cache-Control', 's-maxage=900,stale-while-revalidate=1800');
       return res.status(200).json(d);
-    } catch(e) { continue; }
+    } catch (e) { continue; }
   }
-  return res.status(503).json({ error: 'unavailable' });
+  return res.status(503).json({ error: 'upstream_unavailable', message: `تعذّر جلب بيانات ${sym} من المصدر`, upstreamStatus: lastStatus || null });
 }
