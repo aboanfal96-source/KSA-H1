@@ -34,10 +34,11 @@
 
 ```
 KSAEngine.Stats          mean · median · sd · quantile · percentRank · linreg
-                         normalCdf · tCdf · twoSidedZ/T · wilsonCI
+                         normalCdf · tCdf · twoSidedZ/T · wilson · wilsonCI
                          twoProportionP · binomTailP · benjaminiHochberg · pText
 KSAEngine.SaudiMarket    isTradingDay · addTradingDays · nextTradingDay
-                         tradingDaysBetween · dailyLimits · minSessionsBetween
+                         tradingDaysBetween · dailyLimits
+                         minSessionsToReach (= minSessionsBetween)
 KSAEngine.Cumulative     rollingVWAP · anchoredVWAP · obv · adLine · divergence
 
 sanitizeCandles · auditCandles
@@ -47,8 +48,18 @@ fractalTargets · volumeProfile · valueBand
 spectral · spectralPro · projectTurnsPro · projectCycleTurns
 forecastARIMA · cycleCoherence · empiricalPivotCycles
 timeConfluence · timeWindows
-executionPlan · backtestSpectral
+executionPlan · backtestSpectral · simulateTrade · BT_DEFAULTS
+seededRandom · periodogram          ← أدوات مكشوفة للفحص وإعادة الإنتاج
 ```
+
+### عقود يسهل خرقها بالخطأ
+
+| الدالة | العقد |
+|---|---|
+| `anchoredVWAP(cs, i)` | القيم **قبل** نقطة التثبيت `null` — لا يوجد VWAP مثبّت هناك. ملؤها بأسعار الإغلاق يعطي رقماً تحت اسم VWAP لجلسات لم يبدأ فيها التثبيت |
+| `executionPlan(...)` | `ok:true` يعني خطة كاملة: دخول ووقف وهدف في الاتجاه الصحيح. حين لا يوجد مستوى بنيوي في اتجاه الصفقة ⇒ `ok:false` مع `reason` — خطة بهدف `null` ليست خطة |
+| `backtestSpectral(...)` | `underpowered:true` تعني «لم يُختبر» لا «اختُبر وفشل»، وهما حكمان مختلفان تماماً. العتبة `minSignals` قابلة للضبط ومعلنة في المخرَج |
+| `simulateTrade(...)` | التلامس المزدوج في شمعة واحدة يُحتسب **وقفاً** — ترتيب الوقف والهدف داخل الجلسة غير معلوم من بيانات يومية |
 
 ## الطرق المستعملة، ولماذا هي لا غيرها
 
@@ -70,7 +81,16 @@ executionPlan · backtestSpectral
 ## التشغيل
 
 ```bash
-node tests/engine.test.js     # 73 اختباراً، بلا أي اعتمادية
+node engine/core.test.js      # 45 اختباراً — عقود المحرك
+node engine.test.js           # 73 اختباراً — الطرق الإحصائية والأرقام المقيسة
+node engine/app.smoke.js      # فحص دخاني على طبقة التطبيق
+```
+
+المجموعتان مستقلتان وتختبران زوايا مختلفة، فشغّلهما معاً:
+
+```json
+"test": "node engine/core.test.js && node engine.test.js",
+"verify": "npm test && npm run smoke"
 ```
 
 الملف يعمل في المتصفح (`window.KSAEngine`) وفي Node (`module.exports`) بلا
